@@ -47,8 +47,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# room_id -> set of active WebSocket connections
-rooms: dict[str, set[WebSocket]] = defaultdict(set)
+# room_id -> client_id -> WebSocket  (deduplicates reconnects)
+rooms: dict[str, dict[str, WebSocket]] = defaultdict(dict)
 rooms_lock = asyncio.Lock()
 
 
@@ -57,7 +57,7 @@ rooms_lock = asyncio.Lock()
 @app.get("/")
 def index():
     """Simple status page."""
-    total_listeners = sum(len(ws_set) for ws_set in rooms.values())
+    total_listeners = sum(len(ws_dict) for ws_dict in rooms.values())
     return HTMLResponse(f"""
     <html><body style="font-family:monospace;padding:2em">
     <h2>TalkType Relay</h2>
@@ -72,7 +72,7 @@ def index():
 @app.get("/health")
 def health():
     """Health check."""
-    total_listeners = sum(len(ws_set) for ws_set in rooms.values())
+    total_listeners = sum(len(ws_dict) for ws_dict in rooms.values())
     return {
         "status": "ok",
         "active_rooms": len(rooms),
@@ -101,7 +101,7 @@ async def push_text(room_id: str, request: Request):  # noqa: C901
     if len(text) > 10000:
         raise HTTPException(status_code=400, detail="Text too long (max 10000 chars)")
 
-    listeners = list(rooms.get(room_id, set()))
+    listeners = list(rooms.get(room_id, {}).values())
     if not listeners:
         logger.info(f"Push to room '{room_id[:8]}...' - no listeners connected")
         return {"delivered": 0, "listeners": 0}
@@ -120,7 +120,9 @@ async def push_text(room_id: str, request: Request):  # noqa: C901
     if dead:
         async with rooms_lock:
             for ws in dead:
-                rooms[room_id].discard(ws)
+                cids = [cid for cid, w in rooms[room_id].items() if w is ws]
+                for cid in cids:
+                    rooms[room_id].pop(cid, None)
 
     logger.info(f"Push to room '{room_id[:8]}...' | delivered={delivered} dead={len(dead)} text_len={len(text)}")
     return {"delivered": delivered, "listeners": len(listeners)}
@@ -130,17 +132,24 @@ async def push_text(room_id: str, request: Request):  # noqa: C901
 async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str = ""):
     """
     B machine connects here to receive transcribed text.
-
-    Stays connected persistently. Receives JSON: {"text": "..."}
-    Optional query param: ?client_id=<unique-id>  — deduplicates reconnects.
+    client_id deduplicates reconnects — same client replaces its old connection.
     """
     await websocket.accept()
+    import uuid as _uuid
+    cid = client_id or str(_uuid.uuid4())
 
     async with rooms_lock:
-        rooms[room_id].add(websocket)
+        # Close old connection from same client if still open
+        old_ws = rooms[room_id].get(cid)
+        if old_ws:
+            try:
+                await old_ws.close()
+            except Exception:
+                pass
+        rooms[room_id][cid] = websocket
 
     client = websocket.client
-    logger.info(f"Receiver connected | room='{room_id[:8]}...' | client={client}")
+    logger.info(f"Receiver connected | room='{room_id[:8]}...' | client_id={cid[:8]}... | total={len(rooms[room_id])}")
 
     try:
         # Send acknowledgment
@@ -160,13 +169,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str 
                 except Exception:
                     break
     except WebSocketDisconnect:
-        logger.info(f"Receiver disconnected | room='{room_id[:8]}...'")
+        logger.info(f"Receiver disconnected | room='{room_id[:8]}...' | client_id={cid[:8]}...")
     except Exception as e:
         logger.warning(f"WebSocket error | room='{room_id[:8]}...' | {e}")
     finally:
         async with rooms_lock:
-            rooms[room_id].discard(websocket)
-            # Clean up empty rooms
+            rooms[room_id].pop(cid, None)
             if not rooms[room_id]:
                 del rooms[room_id]
 

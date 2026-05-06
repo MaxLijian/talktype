@@ -33,8 +33,12 @@ import subprocess
 import sys
 import time
 import threading
+import uuid
 
 SYSTEM = platform.system()  # "Darwin", "Windows", "Linux"
+
+# Stable client ID for this machine (deduplicates relay connections across reconnects)
+CLIENT_ID = str(uuid.uuid4())
 
 # === Logging ===
 logging.basicConfig(
@@ -209,9 +213,10 @@ def paste_text(text: str):
 
 # === WebSocket Client ===
 
-async def receive_loop(relay_url: str, room_id: str):
+async def receive_loop(relay_url: str, room_id: str, paste_delay: float = 0.0):
     """
     Connect to relay and paste received text. Auto-reconnects on disconnect.
+    paste_delay: seconds to wait before pasting (gives time to switch focus).
     """
     try:
         import websockets
@@ -221,7 +226,7 @@ async def receive_loop(relay_url: str, room_id: str):
 
     ws_url = relay_url.rstrip("/")
     ws_url = ws_url.replace("https://", "wss://").replace("http://", "ws://")
-    ws_url = f"{ws_url}/ws/{room_id}"
+    ws_url = f"{ws_url}/ws/{room_id}?client_id={CLIENT_ID}"
 
     logger.info(f"Connecting to relay: {ws_url}")
     logger.info(f"Room: {room_id[:8]}...")
@@ -258,7 +263,9 @@ async def receive_loop(relay_url: str, room_id: str):
 
                     text = msg.get("text", "").strip()
                     if text:
-                        # Run paste in a thread so it doesn't block the event loop
+                        # Optional delay: gives user time to switch focus away from terminal
+                        if paste_delay > 0:
+                            await asyncio.sleep(paste_delay)
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, paste_text, text)
 
@@ -352,6 +359,13 @@ Generate a room ID:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log level (default: INFO)",
     )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        help="Seconds to wait before pasting after text is received (default: 0). "
+             "Useful if this terminal keeps stealing focus.",
+    )
     return parser.parse_args()
 
 
@@ -367,11 +381,15 @@ def main():
     print(f"Relay: {args.relay}")
     print(f"Room:  {args.room[:8]}...")
     print(f"OS:    {SYSTEM}")
-    print("Make sure your cursor is in the target input field before speaking.")
+    print()
+    print("TIP: Minimize this terminal window, then focus your target input field.")
+    print("     Text will paste into whatever window has focus when speech arrives.")
+    if args.delay:
+        print(f"     Paste delay: {args.delay}s")
     print("Press Ctrl+C to exit.\n")
 
     try:
-        asyncio.run(receive_loop(args.relay, args.room))
+        asyncio.run(receive_loop(args.relay, args.room, paste_delay=args.delay))
     except KeyboardInterrupt:
         print("\nBye!")
 
