@@ -63,17 +63,12 @@ def _check_macos_accessibility() -> bool:
 
 def _paste_macos(text: str):
     """
-    macOS: pbcopy to clipboard + pyautogui Cmd+V.
+    macOS: pbcopy to clipboard + cliclick kp:cmd-v.
 
-    pyautogui uses CGEvent API directly — works from background processes
-    without System Events / Accessibility permission restrictions.
+    cliclick is a CLI tool (brew install cliclick) that sends CGEvents
+    as a proper command-line process. macOS grants it Accessibility via
+    Terminal.app — no Python GUI bundle needed.
     """
-    try:
-        import pyautogui
-    except ImportError:
-        logger.error("Missing dependency: ~/talktype-venv/bin/pip install pyautogui")
-        return
-
     # Save old clipboard
     try:
         old_clip = subprocess.check_output(["pbpaste"], stderr=subprocess.DEVNULL)
@@ -92,8 +87,14 @@ def _paste_macos(text: str):
 
     time.sleep(0.1)  # Let clipboard settle
 
-    # Paste via CGEvent (works from background, no Accessibility needed)
-    pyautogui.hotkey("command", "v", interval=0.05)
+    # Paste via cliclick (brew install cliclick)
+    result = subprocess.run(
+        ["cliclick", "kp:cmd-v"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        logger.error("cliclick failed — run: brew install cliclick")
+        logger.error("Then add Terminal.app to: System Settings → Privacy & Security → Accessibility")
 
     # Restore old clipboard
     if old_clip is not None:
@@ -306,11 +307,9 @@ def check_dependencies():
             sys.exit(1)
 
     elif SYSTEM == "Darwin":
-        try:
-            import pyautogui  # noqa
-        except ImportError:
-            logger.error("Missing dependency: pip install pyautogui")
-            logger.error("Run: ~/talktype-venv/bin/pip install pyautogui")
+        result = subprocess.run(["which", "cliclick"], capture_output=True)
+        if result.returncode != 0:
+            logger.error("Missing dependency: brew install cliclick")
             sys.exit(1)
 
     try:
