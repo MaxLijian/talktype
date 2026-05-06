@@ -17,5 +17,10 @@ fastapi>=0.100.0
 uvicorn>=0.22.0
 python-multipart>=0.0.6
 
+# Relay server (relay_server.py) - already covered by fastapi/uvicorn above
+
+# Text receiver (text_receiver.py) - WebSocket client
+websockets>=12.0
+
 # Windows/macOS keyboard simulation (Linux uses xdotool)
 pyautogui>=0.9.53; sys_platform != 'linux'

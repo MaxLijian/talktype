@@ -261,6 +261,16 @@ Examples:
         action="store_true",
         help="Run setup wizard (reconfigure settings)"
     )
+    parser.add_argument(
+        "--remote-url",
+        default=os.environ.get("TALKTYPE_RELAY", trans.get("remote_url")),
+        help="Relay server URL for cross-machine typing (e.g. https://myrelay.onrender.com)"
+    )
+    parser.add_argument(
+        "--room",
+        default=os.environ.get("TALKTYPE_ROOM", trans.get("room")),
+        help="Shared room ID / secret (must match text_receiver.py --room)"
+    )
     return parser.parse_args()
 
 
@@ -679,19 +689,51 @@ def paste_text(text: str):
 
 
 # === Main Logic ===
+def send_to_remote(text: str) -> bool:
+    """Send transcribed text to B machine via relay server. Returns True on success."""
+    if not config.remote_url or not config.room:
+        return False
+    try:
+        relay_url = config.remote_url.rstrip("/")
+        resp = requests.post(
+            f"{relay_url}/push/{config.room}",
+            json={"text": text},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        delivered = data.get("delivered", 0)
+        if delivered == 0:
+            show_status("⚠️ REMOTE", "No receivers connected")
+        else:
+            show_status("✅ REMOTE", f"→ {delivered} receiver(s): {text[:40]}")
+        return True
+    except requests.exceptions.ConnectionError:
+        show_status("❌ RELAY", "Cannot reach relay server")
+        return False
+    except Exception as e:
+        show_status("❌ RELAY", str(e)[:50])
+        return False
+
+
 def transcribe_and_paste(audio: np.ndarray):
-    """Background thread: transcribe and paste."""
+    """Background thread: transcribe and paste (local or remote)."""
     global state
     try:
         text = transcribe(audio)
         if text and not is_hallucination(text):
-            paste_text(" " + text)  # Space to separate from previous
+            # Remote mode: send to B machine via relay instead of local paste
+            if config.remote_url and config.room:
+                send_to_remote(" " + text)
+            else:
+                paste_text(" " + text)  # Space to separate from previous
             # Save to history for recovery
             if history:
                 history.add(text)
             beep_success()
             set_terminal_title("TalkType ✅")
-            show_status("✅ DONE", text[:50])
+            if not (config.remote_url and config.room):
+                show_status("✅ DONE", text[:50])
         else:
             beep_error()
             set_terminal_title("TalkType")
@@ -931,6 +973,10 @@ def main():
     print("TalkType - Voice Typing for Your Terminal")
     print("=" * 45)
     print(f"System: {SYSTEM}")
+    if config.remote_url and config.room:
+        print(f"Mode:   REMOTE → {config.remote_url} (room: {config.room[:8]}...)")
+    else:
+        print("Mode:   LOCAL (paste to this machine)")
 
     check_dependencies()
     load_whisper_model()
