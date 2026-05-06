@@ -63,16 +63,24 @@ def _check_macos_accessibility() -> bool:
 
 def _paste_macos(text: str):
     """
-    macOS: copy to clipboard via pbcopy, then send Cmd+V via osascript.
-    Requires Accessibility permission for the terminal running this script.
+    macOS: pbcopy to clipboard + pyautogui Cmd+V.
+
+    pyautogui uses CGEvent API directly — works from background processes
+    without System Events / Accessibility permission restrictions.
     """
+    try:
+        import pyautogui
+    except ImportError:
+        logger.error("Missing dependency: ~/talktype-venv/bin/pip install pyautogui")
+        return
+
     # Save old clipboard
     try:
         old_clip = subprocess.check_output(["pbpaste"], stderr=subprocess.DEVNULL)
     except Exception:
         old_clip = None
 
-    # Write new text to clipboard
+    # Write text to clipboard
     proc = subprocess.run(
         ["pbcopy"],
         input=text.encode("utf-8"),
@@ -82,22 +90,15 @@ def _paste_macos(text: str):
         logger.error("pbcopy failed")
         return
 
-    time.sleep(0.05)
+    time.sleep(0.1)  # Let clipboard settle
 
-    # Paste into focused window via Cmd+V
-    result = subprocess.run(
-        ["osascript", "-e",
-         'tell application "System Events" to keystroke "v" using {command down}'],
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        logger.error("osascript failed — likely missing Accessibility permission")
-        logger.error("Fix: System Settings → Privacy & Security → Accessibility → add your terminal app")
+    # Paste via CGEvent (works from background, no Accessibility needed)
+    pyautogui.hotkey("command", "v", interval=0.05)
 
-    # Restore old clipboard after a short delay
+    # Restore old clipboard
     if old_clip is not None:
         def restore():
-            time.sleep(0.8)
+            time.sleep(1.0)
             subprocess.run(["pbcopy"], input=old_clip, stderr=subprocess.DEVNULL)
         threading.Thread(target=restore, daemon=True).start()
 
@@ -305,15 +306,11 @@ def check_dependencies():
             sys.exit(1)
 
     elif SYSTEM == "Darwin":
-        if not _check_macos_accessibility():
-            logger.error("=" * 55)
-            logger.error("macOS Accessibility permission required but not granted.")
-            logger.error("Steps to fix:")
-            logger.error("  1. Open: System Settings → Privacy & Security → Accessibility")
-            logger.error("  2. Click '+' and add your terminal app (Terminal / iTerm2)")
-            logger.error("  3. Enable the toggle next to it")
-            logger.error("  4. Re-run this script")
-            logger.error("=" * 55)
+        try:
+            import pyautogui  # noqa
+        except ImportError:
+            logger.error("Missing dependency: pip install pyautogui")
+            logger.error("Run: ~/talktype-venv/bin/pip install pyautogui")
             sys.exit(1)
 
     try:
