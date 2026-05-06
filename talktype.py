@@ -698,21 +698,25 @@ def send_to_remote(text: str) -> bool:
         resp = requests.post(
             f"{relay_url}/push/{config.room}",
             json={"text": text},
-            timeout=10,
+            timeout=35,  # Render free tier cold start can take ~30s
         )
         resp.raise_for_status()
         data = resp.json()
         delivered = data.get("delivered", 0)
         if delivered == 0:
-            show_status("⚠️ REMOTE", "No receivers connected")
+            show_status("⚠️ REMOTE", "No receivers connected on B machine")
         else:
             show_status("✅ REMOTE", f"→ {delivered} receiver(s): {text[:40]}")
         return True
+    except requests.exceptions.Timeout:
+        show_status("❌ RELAY", "Timeout - server waking up, retry")
+        return False
     except requests.exceptions.ConnectionError:
         show_status("❌ RELAY", "Cannot reach relay server")
         return False
     except Exception as e:
         show_status("❌ RELAY", str(e)[:50])
+        return False
         return False
 
 
