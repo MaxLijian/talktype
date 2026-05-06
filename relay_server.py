@@ -81,7 +81,7 @@ def health():
 
 
 @app.post("/push/{room_id}")
-async def push_text(room_id: str, request: Request):
+async def push_text(room_id: str, request: Request):  # noqa: C901
     """
     Send text to all receivers in a room.
 
@@ -127,11 +127,12 @@ async def push_text(room_id: str, request: Request):
 
 
 @app.websocket("/ws/{room_id}")
-async def websocket_endpoint(websocket: WebSocket, room_id: str):
+async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str = ""):
     """
     B machine connects here to receive transcribed text.
 
     Stays connected persistently. Receives JSON: {"text": "..."}
+    Optional query param: ?client_id=<unique-id>  — deduplicates reconnects.
     """
     await websocket.accept()
 

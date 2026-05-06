@@ -47,16 +47,22 @@ logger = logging.getLogger("receiver")
 
 # === Paste Logic ===
 
+def _check_macos_accessibility() -> bool:
+    """Check if terminal has macOS Accessibility permission for keystroke injection."""
+    result = subprocess.run(
+        ["osascript", "-e",
+         'tell application "System Events" to get name of first process whose frontmost is true'],
+        capture_output=True, timeout=3,
+    )
+    return result.returncode == 0
+
+
 def _paste_macos(text: str):
     """
     macOS: copy to clipboard via pbcopy, then send Cmd+V via osascript.
-
-    Why clipboard+paste and not direct keystroke injection?
-    - `osascript keystroke "你好"` works but is SLOW (processes per char)
-    - `pbcopy` + `keystroke "v" using {command down}` is instant
-    - Clipboard approach bypasses IME entirely — correct for Chinese
+    Requires Accessibility permission for the terminal running this script.
     """
-    # Save old clipboard using pbpaste (more reliable than pyperclip on macOS)
+    # Save old clipboard
     try:
         old_clip = subprocess.check_output(["pbpaste"], stderr=subprocess.DEVNULL)
     except Exception:
@@ -75,21 +81,20 @@ def _paste_macos(text: str):
     time.sleep(0.05)
 
     # Paste into focused window via Cmd+V
-    subprocess.run(
+    result = subprocess.run(
         ["osascript", "-e",
          'tell application "System Events" to keystroke "v" using {command down}'],
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
     )
+    if result.returncode != 0:
+        logger.error("osascript failed — likely missing Accessibility permission")
+        logger.error("Fix: System Settings → Privacy & Security → Accessibility → add your terminal app")
 
     # Restore old clipboard after a short delay
     if old_clip is not None:
         def restore():
             time.sleep(0.8)
-            proc = subprocess.run(
-                ["pbcopy"],
-                input=old_clip,
-                stderr=subprocess.DEVNULL,
-            )
+            subprocess.run(["pbcopy"], input=old_clip, stderr=subprocess.DEVNULL)
         threading.Thread(target=restore, daemon=True).start()
 
 
@@ -290,6 +295,18 @@ def check_dependencies():
             import pyautogui
         except ImportError:
             logger.error("Missing dependency: pip install pyautogui")
+            sys.exit(1)
+
+    elif SYSTEM == "Darwin":
+        if not _check_macos_accessibility():
+            logger.error("=" * 55)
+            logger.error("macOS Accessibility permission required but not granted.")
+            logger.error("Steps to fix:")
+            logger.error("  1. Open: System Settings → Privacy & Security → Accessibility")
+            logger.error("  2. Click '+' and add your terminal app (Terminal / iTerm2)")
+            logger.error("  3. Enable the toggle next to it")
+            logger.error("  4. Re-run this script")
+            logger.error("=" * 55)
             sys.exit(1)
 
     try:
