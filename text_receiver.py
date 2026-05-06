@@ -88,8 +88,9 @@ def _paste_macos(text: str):
     time.sleep(0.1)  # Let clipboard settle
 
     # Paste via cliclick (brew install cliclick)
+    # kd:cmd = hold Cmd, t:v = type v, ku:cmd = release Cmd
     result = subprocess.run(
-        ["cliclick", "kp:cmd-v"],
+        ["cliclick", "kd:cmd", "t:v", "ku:cmd"],
         capture_output=True,
     )
     if result.returncode != 0:
